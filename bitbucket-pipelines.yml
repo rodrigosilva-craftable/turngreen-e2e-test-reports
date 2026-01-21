@@ -1,0 +1,152 @@
+# TurnGreen - Playwright Test Automation Pipeline
+# This pipeline runs tests, generates Allure reports, and uploads artifacts
+
+image: mcr.microsoft.com/playwright:v1.54.1-noble
+
+definitions:
+  steps:
+    - step: &run-tests
+        name: Run Playwright Tests
+        caches:
+          - node
+        script:
+          # Install dependencies
+          - echo "Installing dependencies..."
+          - npm ci
+          
+          # Install Playwright browsers
+          - echo "Installing Playwright browsers..."
+          - npx playwright install --with-deps chromium
+          
+          # Export environment variables from Bitbucket Repository Variables
+          - echo "Setting up environment variables..."
+          - export FUSION_EMAIL=$FUSION_EMAIL
+          - export FUSION_PASSWORD=$FUSION_PASSWORD
+          - export CMS_LOGIN_EMAIL=$CMS_LOGIN_EMAIL
+          - export CMS_LOGIN_PASSWORD=$CMS_LOGIN_PASSWORD
+          
+          # Run Playwright tests and capture exit code
+          - echo "Running Playwright tests..."
+          - |
+            set +e
+            npm test
+            TEST_EXIT_CODE=$?
+            set -e
+            echo "Test exit code: $TEST_EXIT_CODE"
+            
+            if [ $TEST_EXIT_CODE -ne 0 ]; then
+              echo "Tests failed! Sending Slack notification..."
+              curl -X POST $SLACK_WEBHOOK_URL \
+              -H 'Content-Type: application/json' \
+              -d '{
+                "text": "‚ùå TurnGreen Tests - Pipeline Failed!",
+                "attachments": [
+                  {
+                    "color": "#ff0000",
+                    "title": "Build #'"$BITBUCKET_BUILD_NUMBER"' - FAILED",
+                    "title_link": "https://bitbucket.org/craftablesoftware/e2e-turngreen/addon/pipelines/home#!/results/'"$BITBUCKET_BUILD_NUMBER"'",
+                    "fields": [
+                      {
+                        "title": "Branch",
+                        "value": "'"$BITBUCKET_BRANCH"'",
+                        "short": true
+                      },
+                      {
+                        "title": "Commit",
+                        "value": "'"${BITBUCKET_COMMIT:0:7}"'",
+                        "short": true
+                      },
+                      {
+                        "title": "Tests",
+                        "value": "Some tests failed ‚ùå",
+                        "short": false
+                      }
+                    ],
+                    "actions": [
+                      {
+                        "type": "button",
+                        "text": "View Pipeline Ì¥ó",
+                        "url": "https://bitbucket.org/craftablesoftware/e2e-turngreen/addon/pipelines/home#!/results/'"$BITBUCKET_BUILD_NUMBER"'"
+                      },
+                      {
+                        "type": "button",
+                        "text": "View Allure Report Ì≥ä",
+                        "url": "https://craftablesoftware.github.io/turngreen-e2e-test-reports/"
+                      }
+                    ],
+                    "footer": "TurnGreen Automated Tests",
+                    "footer_icon": "https://playwright.dev/img/playwright-logo.svg",
+                    "ts": '"$(date +%s)"'
+                  }
+                ]
+              }'
+            else
+              echo "All tests passed! No Slack notification needed."
+            fi
+            
+            exit $TEST_EXIT_CODE
+        artifacts:
+          - allure-results/**
+          - test-results/**
+          - playwright-report/**
+    
+    - step: &generate-allure-report
+        name: Generate Allure Report
+        image: openjdk:17-jdk-slim
+        script:
+          # Install Allure
+          - echo "Installing Allure..."
+          - apt-get update && apt-get install -y wget unzip
+          - wget https://github.com/allure-framework/allure2/releases/download/2.36.0/allure-2.36.0.zip
+          - unzip allure-2.36.0.zip -d /opt/
+          - ln -s /opt/allure-2.36.0/bin/allure /usr/bin/allure
+          
+          # Generate Allure report
+          - echo "Generating Allure report..."
+          - allure generate allure-results --clean -o allure-report
+          
+          # Push to GitHub Pages
+          - apt-get update && apt-get install -y git
+          - cd allure-report
+          - git init
+          - git checkout -b gh-pages
+          - git config user.name "Bitbucket Pipeline"
+          - git config user.email "pipeline@bitbucket.org"
+          - git add .
+          - git commit -m "Update report - Build $BITBUCKET_BUILD_NUMBER"
+          - git push -f https://$GITHUB_TOKEN@github.com/craftablesoftware/turngreen-e2e-test-reports.git gh-pages:gh-pages
+          
+          # Create a zip of the report
+          - apt-get install -y zip
+          - cd allure-report && zip -r ../allure-report.zip . && cd ..
+          - echo "Allure report generated successfully!"
+        artifacts:
+          - allure-report/**
+          - allure-report.zip
+
+pipelines:
+  default:
+    - step: *run-tests
+    - step: 
+        <<: *generate-allure-report
+        trigger: manual
+  
+  branches:
+    master:
+      - step: *run-tests
+      - step: 
+          <<: *generate-allure-report
+          trigger: automatic
+    
+    main:
+      - step: *run-tests
+      - step: 
+          <<: *generate-allure-report
+          trigger: automatic
+  
+  pull-requests:
+    '**':
+      - step: *run-tests
+      - step: 
+          <<: *generate-allure-report
+          trigger: automatic
