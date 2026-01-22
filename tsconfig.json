@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "esModuleInterop": true,
+    "target": "ES6",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "dist",
+    "strict": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["tests/**/*.ts", "pages/**/*.ts"]
+}
